@@ -9,11 +9,11 @@ Aurora Global Database(PosgreSQL)をCLIで作成する手順
 # 作成手順
 
 ## (1)事前設定
-### (a) 作業環境の準備
+### (1)-(a) 作業環境の準備
 下記を準備します。
 * aws-cliのセットアップ
 * AdministratorAccessポリシーが付与され実行可能な、aws-cliのProfileの設定
-### (b) CLI実行用の事前準備
+### (1)-(b) CLI実行用の事前準備
 これ以降のAWS-CLIで共通で利用するパラメータを環境変数で設定しておきます。
 ```shell
 export PROFILE="default" #AdministratorAccess権限のあるプロファイルを指定
@@ -285,7 +285,7 @@ aws --profile ${PROFILE} --region ${SECONDARY_REGION} \
 ```
 
 ## (4)RDS Aurora PosgreSQLの作成
-### (4)-(a) 設定
+### (4)-(a) RDS設定
 ```shell
 #サブネットグループ
 RDS_SUBNETGROUP_NAME="aurorapoc-subnetgroup"       #全て小文字で設定
@@ -314,7 +314,6 @@ aws --profile ${PROFILE} --region ${PRIMARY_REGION} \
         --global-cluster-identifier "${RDS_GLOBALDB_NAME}" \
         --engine "${RDS_ENGINE_NAME}" \
         --engine-version "${RDS_ENGINE_VERSION}" \
-        --database-name "${RDS_DB_NAME}" \
         --storage-encrypted \
         --no-deletion-protection 
 ```
@@ -344,6 +343,7 @@ aws --profile ${PROFILE} --region ${PRIMARY_REGION} \
         --db-parameter-group-family "${RDS_PARAMETER_GROUP_FAMILY}" \
         --description  "PoC for GlobalDatabase"
 ```
+
 #### (iii) (プライマリー側)DBクラスターの作成
 ```shell
 #DBクラスターの作成
@@ -357,6 +357,7 @@ aws --profile ${PROFILE} --region ${PRIMARY_REGION} --no-cli-pager \
         --vpc-security-group-ids "${PRIMARY_RDS_SG_ID}" \
         --db-subnet-group-name "${RDS_SUBNETGROUP_NAME}" \
         --kms-key-id  "${PRIMARY_KEY_ID}" \
+        --database-name "${RDS_DB_NAME}" \
         --master-username "${RDS_USER_NAME}" \
         --master-user-password "${RDS_USER_PASS}" \
         --backup-retention-period 3 \
@@ -492,43 +493,55 @@ do
 done
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## (6)PosgreSQL接続テスト
-### (a) BastionインスタンスのPublic IP取得とsshログイン
+## (5)PosgreSQL接続テスト
+### (5)-(a) ClientインスタンスのPublic IP取得
 ```shell
-BastionIP=$(aws --profile ${PROFILE} --output text \
-    ec2 describe-instances \
-        --filter "Name=tag:Name,Values=Bastion" "Name=instance-state-name,Values=running"  \
-    --query 'Reservations[].Instances[].NetworkInterfaces[].Association.PublicIp' \
-)
-ssh ec2-user@${BastionIP}
+PRIMARY_REGION_CLINET_IP=$(aws --profile ${PROFILE} --region ${PRIMARY_REGION} --output text \
+    cloudformation describe-stacks \
+        --stack-name Aurora-GlobalDB-Client \
+        --query 'Stacks[].Outputs[?OutputKey==`PublicIp`].[OutputValue]')
+
+SECONDARY_REGION_CLINET_IP=$(aws --profile ${PROFILE} --region ${PRIMARY_REGION} --output text \
+    cloudformation describe-stacks \
+        --stack-name Aurora-GlobalDB-Client \
+        --query 'Stacks[].Outputs[?OutputKey==`PublicIp`].[OutputValue]')
 ```
-### (b) BastionサーバからのAurora接続＆動作テスト
+
+### (5)-(b) ClientインスタンスからのAurora接続＆動作テスト
+プライマリーリージョンのクライアントインスタンスに接続します。
+#### (i)接続と設定
 ```shell
-RDS_ENDPOINT="xxxx"
-RDS_DB_NAME='multiaztestdb'
-RDS_USER_NAME='root'
-RDS_USER_PASS='dbPassword#'
+ssh ec2-user@${PRIMARY_REGION_CLINET_IP}
+```
+インスタンスの初期設定を行います。
+```shell
+# Setup AWS CLI
+REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed -e 's/.$//')
+aws configure set region ${REGION}
+aws configure set output json
+# AWS CLIの動作テスト
+aws sts get-caller-identity
 
 #postgreSQLのインストール
 sudo yum -y install postgresql
+```
+Auroraの接続情報を設定します。
+```shell
+#Aurora情報 ※(4)-(a)で名称変更した場合は変更した内容を設定
+RDS_GLOBALDB_NAME='aurorapoc-globaldb-1'
+RDS_PRIMARY_DBCLUSTER_NAME="${RDS_GLOBALDB_NAME}-primary-cluster"
+RDS_DB_NAME='globaldbpoc'
+RDS_USER_NAME='root'
+RDS_USER_PASS='dbPassword#'
 
+#Aurora Endpoint取得
+RDS_ENDPOINT=$(aws --output text \
+    rds describe-db-clusters \
+    --query 'DBClusters[?DBClusterIdentifier==`'"${RDS_PRIMARY_DBCLUSTER_NAME}"'`].Endpoint' )
+echo "RDS_ENDPOINT = ${RDS_ENDPOINT}"
+```
+#### (ii)接続テスト
+```shell
 #接続テスト
 export PGPASSWORD=${RDS_USER_PASS}
 psql -h ${RDS_ENDPOINT} -d ${RDS_DB_NAME} -U ${RDS_USER_NAME}
@@ -550,8 +563,7 @@ SQL> \d testtbl
 SQL> INSERT INTO testtbl (name, age) VALUES ('鈴木',20);
 SQL> INSERT INTO testtbl (name, age) VALUES ('田中',31);
 SQL> INSERT INTO testtbl (name, age) VALUES ('安田',35);
-SQL> 
-commit;
+SQL> commit;
 
 #データ確認
 SQL> select * from testtbl;
@@ -559,95 +571,72 @@ SQL> select * from testtbl;
 #終了
 \q
 ```
-### (c) フェイルオーバーテスト
-作業用コンソールでを実行
-```shell
-export PROFILE=<設定したプロファイル名称を指定。デフォルトの場合はdefaultを設定>
 
-#フェイルオーバーの実行(1cにフェイルオーバー)
-aws --profile ${PROFILE} \
+
+## (6)フェイルオーバーテスト
+### (6)-(a)プライマリーリージョン内でのインスタンスフェイルオーバーテスト
+以下は作業用コンソールで実行します。事前に以下のパラメータ設定をしている前提とします。
+- `(1)-(b) CLI実行用の事前準備`のプロファイルとリージョンに関する変数
+- `(4)-(a) RDS設定`のRDBに関する変数
+
+```shell
+#フェイルオーバーの実行
+aws --profile ${PROFILE} --region ${PRIMARY_REGION} --no-cli-pager \
     rds failover-db-cluster \
-        --db-cluster-identifier "multi-azs-test-aurora-posgre-cluster" \
-        --target-db-instance-identifier "multi-azs-test-aurora-posgre-instance-1c"
+        --db-cluster-identifier "${RDS_PRIMARY_DBCLUSTER_NAME}"
+```
 
-
-#フェイルオーバーの実行(1aにフェイルオーバー、切り戻し)
-aws --profile ${PROFILE} \
+指定したインスタンスを昇格したい場合は以下のコマンドを実行
+```shell
+#フェイルオーバーの実行
+aws --profile ${PROFILE} --region ${PRIMARY_REGION} --no-cli-pager \
     rds failover-db-cluster \
-        --db-cluster-identifier "multi-azs-test-aurora-posgre-cluster" \
-        --target-db-instance-identifier "multi-azs-test-aurora-posgre-instance-1a"
+        --db-cluster-identifier "${RDS_PRIMARY_DBCLUSTER_NAME}" \
+        --target-db-instance-identifier "<昇格させたいDBインスタンスの識別子>"
 ```
 
-## (7)インスタンス削除、再作成テスト
-### (a) 既存DBインスタンスの削除
+### (6)-(b)グローバルデータベースのセカンダリリージョンへのフェイルオーバーテスト(計画切替)
+計画切り替えの場合は、プライマリーリージョンで操作します。
+#### (i)プライマリーリージョンからセカンダリリージョンへのフェイルオーバー
 ```shell
-export PROFILE=<設定したプロファイル名称を指定。デフォルトの場合はdefaultを設定>
-
-#インスタンス削除(1台目:1a)
-aws --profile ${PROFILE} \
-    rds delete-db-instance \
-        --db-instance-identifier "multi-azs-test-aurora-posgre-instance-1a" ;
-
-#インスタンス削除(2台目:1c)
-aws --profile ${PROFILE} \
-    rds delete-db-instance \
-        --db-instance-identifier "multi-azs-test-aurora-posgre-instance-1c" ;
-
-#インスタンス削除(3台目:1d)
-aws --profile ${PROFILE} \
-    rds delete-db-instance \
-        --db-instance-identifier "multi-azs-test-aurora-posgre-instance-1d" ;
-
-#インスタンス削除完了の確認
-#下記を実行して、インスタンスがなくなったことを確認
-aws --profile ${PROFILE} \
-    rds describe-db-clusters \
-        --db-cluster-identifier "multi-azs-test-aurora-posgre-cluster" \
-    --query 'DBClusters[].DBClusterMembers'
-
-```
-### (b) インスタンスの再追加
-```shell
-
-#DBインスタンスの作成(3台目 - 1d)
-aws --profile ${PROFILE} \
-    rds create-db-instance \
-        --db-instance-identifier "multi-azs-test-aurora-posgre-instance-1d" \
-        --availability-zone "ap-northeast-1d" \
-        --db-instance-class ${RDS_INSTANCE_CLASS} \
-        --engine ${RDS_ENGINE_NAME} \
-        --engine-version ${RDS_ENGINE_VERSION} \
-        --db-parameter-group-name "multiazs-test-parametergrp" \
-        --no-auto-minor-version-upgrade \
-        --no-publicly-accessible \
-        --db-cluster-identifier "multi-azs-test-aurora-posgre-cluster" \
-        --preferred-maintenance-window "Mon:15:00-Mon:15:30" \
-        --monitoring-interval 1 \
-        --monitoring-role-arn ${RDS_MONITOR_ROLE_ARN} ;
-```
-インスタンス起動後に、接続可能か確認。
-```shell
-BastionIP=$(aws --profile ${PROFILE} --output text \
-    ec2 describe-instances \
-        --filter "Name=tag:Name,Values=Bastion" "Name=instance-state-name,Values=running"  \
-    --query 'Reservations[].Instances[].NetworkInterfaces[].Association.PublicIp' \
+SECONDARY_DB_CLUSTER_ARN=$(aws rds --profile ${PROFILE} --region ${PRIMARY_REGION} describe-global-clusters | \
+    jq -r '
+        .GlobalClusters[] | 
+        select(.GlobalClusterIdentifier == "'${RDS_GLOBALDB_NAME}'").GlobalClusterMembers[] |
+        select(.IsWriter == false).DBClusterArn'
 )
-ssh ec2-user@${BastionIP}
 
-#SSH接続後
-RDS_ENDPOINT="xxxx"
-RDS_DB_NAME='multiaztestdb'
-RDS_USER_NAME='root'
-RDS_USER_PASS='dbPassword#'
-
-#接続テスト
-export PGPASSWORD=${RDS_USER_PASS}
-psql -h ${RDS_ENDPOINT} -d ${RDS_DB_NAME} -U ${RDS_USER_NAME}
-
-
-#データ確認
-SQL> select * from testtbl;
-
-#終了
-\q
+#フェイルオーバー
+aws rds --profile ${PROFILE} --region ${PRIMARY_REGION} --no-cli-pager \
+   failover-global-cluster \
+    --global-cluster-identifier "${RDS_GLOBALDB_NAME}" \
+    --target-db-cluster-identifier "${SECONDARY_DB_CLUSTER_ARN}"
 ```
+#### (ii)セカンダリリージョンからプライマリーリージョンからへの切り戻し
+
+```shell
+PRIMARY_DB_CLUSTER_ARN=$(aws rds --profile ${PROFILE} --region ${SECONDARY_REGION} describe-global-clusters | \
+    jq -r '
+        .GlobalClusters[] | 
+        select(.GlobalClusterIdentifier == "'${RDS_GLOBALDB_NAME}'").GlobalClusterMembers[] |
+        select(.IsWriter == false).DBClusterArn'
+)
+
+#フェイルオーバー
+aws rds --profile ${PROFILE} --region ${SECONDARY_REGION} --no-cli-pager \
+   failover-global-cluster \
+    --global-cluster-identifier "${RDS_GLOBALDB_NAME}" \
+    --target-db-cluster-identifier "${PRIMARY_DB_CLUSTER_ARN}"
+```
+
+
+### (6)-(c)被災時のセカンダリリージョンのぃのクラスター昇格
+こちらは別途検証。
+
+ドキュメント[予期しない停止からの Amazon Aurora グローバルデータベースの復旧](https://docs.aws.amazon.com/ja_jp/AmazonRDS/latest/AuroraUserGuide/aurora-global-database-disaster-recovery.html#aurora-global-database-failover)参照。
+
+手順
+- プライマリ Aurora DB クラスターの更新を完全に停止させる
+- セカンダリリージョンのAuroraDBをグローバルデータベースからでタッチする(単独のDBクラスターに昇格する)
+- 新しいエンドポイントを確認し、アプリケーションに設定する
+
