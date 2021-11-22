@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy Client Instances
+#----------------------------------------------
+Parameters:
+  #------------------
+  InstanceType:
+    Description: (Optional) Instance type
+    Type: String
+    Default: t2.large
+  AmiId:
+    Description: (Required) AMI ID
+    Type: String
+  KeyName:
+    Description: (Required) Key Pair Name
+    Type: String
+  AutoRecoveryMinutes:
+    Description: (optional) Auto Recovery Time(Minutes)
+    Type: Number
+    Default: 1
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      -
+        Label:
+          default:  Instances
+        Parameters:
+          - InstanceType
+          - AmiId
+          - KeyName
+          - AutoRecoveryMinutes
+#----------------------------------------------
+Conditions: 
+  CheckAutoRecovery: !Not [!Equals [!Ref AutoRecoveryMinutes, 0 ]]
+#----------------------------------------------
+Resources:
+  #------------------ IAM Role:
+  Role:
+    Type: AWS::IAM::Role
+    Properties: 
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles: 
+        - !Ref Role
+  SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: "Allow SSH for bation"
+      VpcId:
+        Fn::ImportValue: Aurora-GlobalDB-VPC-VpcId
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+      Tags: 
+        - Key: "Name"
+          Value: "AuroraPoC-Client"
+
+  #------------------ Instance:
+  Client:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub ${AmiId}
+      InstanceType: !Sub ${InstanceType}
+      IamInstanceProfile: !Ref Profile
+      KeyName: !Ref KeyName
+      Monitoring: yes
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId:
+            Fn::ImportValue: Aurora-GlobalDB-VPC-PublicSubnet1Id
+          GroupSet:
+            - !Ref SG
+          AssociatePublicIpAddress: true
+      Tags:
+        - Key: Name
+          Value: AuroraPoC-Client
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update ALL rpms, and change hostname to Userfrendly name 
+          yum -y update
+          hostnamectl set-hostname "AuroraPoC-Client"
+
+          # Setup AWS CLI
+          aws configure set region ${AWS::Region}
+          aws configure set output json
+
+  AutoRecovery:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CheckAutoRecovery
+    Properties:
+      AlarmDescription: AutoRecovery for the K8sMgr
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: !Ref AutoRecoveryMinutes
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      AlarmActions:
+      - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+      - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:admin"
+      Dimensions:
+      - Name: InstanceId
+        Value: !Ref Client
+
+Outputs:
+  #---------------- EC2 Instance
+  SGId:
+    Description: SecurityGroup ID for Client
+    Value: !Ref SG
+    Export:
+      Name: !Sub ${AWS::StackName}-SGId
