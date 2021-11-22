@@ -507,6 +507,8 @@ done
 
 
 
+
+
 ## (6)PosgreSQL接続テスト
 ### (a) BastionインスタンスのPublic IP取得とsshログイン
 ```shell
