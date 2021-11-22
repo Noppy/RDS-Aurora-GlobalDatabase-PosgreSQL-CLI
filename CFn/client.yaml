@@ -49,6 +49,15 @@ Resources:
               - sts:AssumeRole
       ManagedPolicyArns: 
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: AllowDescribeRDS
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'rds:describe*'
+                Resource: '*'
+
   Profile:
     Type: AWS::IAM::InstanceProfile
     Properties: 
@@ -125,3 +134,8 @@ Outputs:
     Value: !Ref SG
     Export:
       Name: !Sub ${AWS::StackName}-SGId
+  PublicIp:
+    Description: Public IP address of Client
+    Value: !GetAtt Client.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicIp
