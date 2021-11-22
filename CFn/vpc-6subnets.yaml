@@ -299,9 +299,6 @@ Resources:
     Properties:
       InternetGatewayId: !Ref Igw
       VpcId: !Ref Vpc
-    DependsOn:
-      - Vpc
-      - Igw
   #------------------ Subnet
   PublicSubnet1:
     Type: AWS::EC2::Subnet
