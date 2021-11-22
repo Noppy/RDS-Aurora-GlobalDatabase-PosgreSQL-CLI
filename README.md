@@ -20,6 +20,12 @@ export PROFILE="default" #AdministratorAccess権限のあるプロファイル�
 export PRIMARY_REGION="ap-northeast-1"    #プライマリ側リージョン指定(この手順では東京リージョン)
 export SECONDARY_REGION="ap-northeast-3"  #セカンダリ側リージョン指定(この手順では大阪リージョン)
 ```
+### (1)-(c) このコードのダウンロード
+```shell
+git clone https://github.com/Noppy/RDS-Aurora-GlobalDatabase-PosgreSQL-CLI.git
+cd RDS-Aurora-GlobalDatabase-PosgreSQL-CLI
+```
+
 ## (2)VPCとClientの作成(CloudFormation利用)
 IGWでインターネットアクセス可能で、パブリックアクセス可能なサブネットx3、プライベートなサブネットx3の合計6つのサブネットを所有するVPCを作成します。
 
