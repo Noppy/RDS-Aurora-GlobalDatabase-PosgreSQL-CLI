@@ -362,6 +362,8 @@ aws --profile ${PROFILE} --region ${PRIMARY_REGION} --no-cli-pager \
         --db-cluster-parameter-group-name "${RDS_PARAMETERGROUP_NAME}" \
         --vpc-security-group-ids "${PRIMARY_RDS_SG_ID}" \
         --db-subnet-group-name "${RDS_SUBNETGROUP_NAME}" \
+	--no-publicly-accessible \
+	--no-auto-minor-version-upgrade \
         --kms-key-id  "${PRIMARY_KEY_ID}" \
         --database-name "${RDS_DB_NAME}" \
         --master-username "${RDS_USER_NAME}" \
@@ -452,6 +454,8 @@ aws --profile ${PROFILE} --region ${SECONDARY_REGION} --no-cli-pager \
         --db-cluster-parameter-group-name "${RDS_PARAMETERGROUP_NAME}" \
         --vpc-security-group-ids "${SECONDARY_RDS_SG_ID}" \
         --db-subnet-group-name "${RDS_SUBNETGROUP_NAME}" \
+	--no-publicly-accessible \
+	--no-auto-minor-version-upgrade \
         --kms-key-id "${SECONDARY_KEY_ID}" \
         --backup-retention-period 3 \
         --preferred-backup-window "17:30-18:00" \
